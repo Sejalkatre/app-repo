@@ -2,25 +2,28 @@ pipeline {
     agent any
 
     environment {
-        // Jenkins credentials IDs
-        AWS_CREDS = credentials('aws-creds')             // AWS Access Key/Secret
-        DOCKERHUB_CREDS = credentials('dockerhub-creds') // DockerHub username/password
+        AWS_CREDS = credentials('aws-creds')
+        DOCKERHUB_CREDS = credentials('dockerhub-creds')
     }
 
     stages {
         stage('Checkout App Repo') {
             steps {
-                git branch: 'main',
-                    url: 'https://github.com/Sejalkatre/app-repo.git',
-                    credentialsId: 'Github-creds'
+                dir('app-repo') {
+                    git branch: 'main',
+                        url: 'https://github.com/Sejalkatre/app-repo.git',
+                        credentialsId: 'Github-creds'
+                }
             }
         }
 
         stage('Checkout Infra Repo') {
             steps {
-                git branch: 'main',
-                    url: 'https://github.com/sejalkatre/infra-repo.git',
-                    credentialsId: 'Github-creds'
+                dir('infra-repo') {
+                    git branch: 'main',
+                        url: 'https://github.com/Sejalkatre/infra-repo.git',
+                        credentialsId: 'Github-creds'
+                }
             }
         }
 
@@ -98,7 +101,7 @@ pipeline {
                     docker.withRegistry('https://index.docker.io/v1/', 'dockerhub-creds') {
                         def app = docker.build("sejalkatre/flask-app:${env.BUILD_NUMBER}")
                         app.push()
-                        app.push("latest") // also push latest tag
+                        app.push("latest")
                     }
                 }
             }
@@ -106,10 +109,7 @@ pipeline {
 
         stage('ArgoCD Sync') {
             steps {
-                script {
-                    // Optional: ArgoCD auto-syncs anyway
-                    sh 'argocd app sync flask-app || true'
-                }
+                sh 'argocd app sync flask-app || true'
             }
         }
     }
