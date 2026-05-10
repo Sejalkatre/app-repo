@@ -2,21 +2,31 @@ pipeline {
     agent any
 
     environment {
-        // Use Jenkins credentials IDs
-        AWS_CREDS = credentials('aws-creds')          // AWS Access Key/Secret
+        // Jenkins credentials IDs
+        AWS_CREDS = credentials('aws-creds')             // AWS Access Key/Secret
         DOCKERHUB_CREDS = credentials('dockerhub-creds') // DockerHub username/password
     }
 
     stages {
-        stage('Checkout') {
+        stage('Checkout App Repo') {
             steps {
-                checkout scm
+                git branch: 'main',
+                    url: 'https://github.com/sejalkatre/flask-app-ci-cd.git',
+                    credentialsId: 'github-creds'
+            }
+        }
+
+        stage('Checkout Infra Repo') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/sejalkatre/infra-repo.git',
+                    credentialsId: 'github-creds'
             }
         }
 
         stage('Terraform Init') {
             steps {
-                dir('../infra-repo/terraform') {
+                dir('infra-repo/terraform') {
                     sh '''
                         export AWS_ACCESS_KEY_ID=$AWS_CREDS_USR
                         export AWS_SECRET_ACCESS_KEY=$AWS_CREDS_PSW
@@ -28,7 +38,7 @@ pipeline {
 
         stage('Terraform Plan') {
             steps {
-                dir('../infra-repo/terraform') {
+                dir('infra-repo/terraform') {
                     sh '''
                         export AWS_ACCESS_KEY_ID=$AWS_CREDS_USR
                         export AWS_SECRET_ACCESS_KEY=$AWS_CREDS_PSW
@@ -44,7 +54,7 @@ pipeline {
                     timeout(time: 10, unit: 'MINUTES') {
                         input message: "Do you want to apply Terraform changes?"
                     }
-                    dir('../infra-repo/terraform') {
+                    dir('infra-repo/terraform') {
                         sh '''
                             export AWS_ACCESS_KEY_ID=$AWS_CREDS_USR
                             export AWS_SECRET_ACCESS_KEY=$AWS_CREDS_PSW
@@ -52,6 +62,25 @@ pipeline {
                         '''
                     }
                 }
+            }
+        }
+
+        stage('Configure kubeconfig') {
+            steps {
+                sh '''
+                    export AWS_ACCESS_KEY_ID=$AWS_CREDS_USR
+                    export AWS_SECRET_ACCESS_KEY=$AWS_CREDS_PSW
+                    aws eks update-kubeconfig --region us-west-2 --name devops-cluster
+                '''
+            }
+        }
+
+        stage('Install ArgoCD') {
+            steps {
+                sh '''
+                    kubectl create namespace argocd || true
+                    kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+                '''
             }
         }
 
