@@ -12,7 +12,7 @@ pipeline {
             steps {
                 git branch: 'main',
                     url: 'https://github.com/sejalkatre/flask-app-ci-cd.git',
-                    credentialsId: 'github-creds'
+                    credentialsId: 'Github-creds'
             }
         }
 
@@ -20,7 +20,7 @@ pipeline {
             steps {
                 git branch: 'main',
                     url: 'https://github.com/sejalkatre/infra-repo.git',
-                    credentialsId: 'github-creds'
+                    credentialsId: 'Github-creds'
             }
         }
 
