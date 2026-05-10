@@ -11,7 +11,7 @@ pipeline {
         stage('Checkout App Repo') {
             steps {
                 git branch: 'main',
-                    url: 'https://github.com/sejalkatre/flask-app-ci-cd.git',
+                    url: 'https://github.com/Sejalkatre/app-repo.git',
                     credentialsId: 'Github-creds'
             }
         }
