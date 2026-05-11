@@ -1,8 +1,15 @@
 pipeline {
     agent any
 
+    environment {
+        INFRA_CHANGED = "false"
+    }
+
     stages {
 
+        // -----------------------------------
+        // Checkout App Repo
+        // -----------------------------------
         stage('Checkout App Repo') {
             steps {
 
@@ -15,6 +22,9 @@ pipeline {
             }
         }
 
+        // -----------------------------------
+        // Checkout Infra Repo
+        // -----------------------------------
         stage('Checkout Infra Repo') {
             steps {
 
@@ -27,7 +37,48 @@ pipeline {
             }
         }
 
+        // -----------------------------------
+        // Detect Terraform Changes
+        // -----------------------------------
+        stage('Check Infra Changes') {
+            steps {
+
+                script {
+
+                    def infraChanges = sh(
+                        script: """
+                            cd infra-repo
+
+                            git diff --name-only HEAD~1 HEAD | grep terraform || true
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    if (infraChanges) {
+
+                        env.INFRA_CHANGED = "true"
+
+                        echo "Terraform changes detected."
+                    }
+                    else {
+
+                        echo "No Terraform changes detected."
+                    }
+                }
+            }
+        }
+
+        // -----------------------------------
+        // Terraform Init
+        // -----------------------------------
         stage('Terraform Init') {
+
+            when {
+                expression {
+                    env.INFRA_CHANGED == "true"
+                }
+            }
+
             steps {
 
                 withCredentials([
@@ -49,7 +100,17 @@ pipeline {
             }
         }
 
+        // -----------------------------------
+        // Terraform Plan
+        // -----------------------------------
         stage('Terraform Plan') {
+
+            when {
+                expression {
+                    env.INFRA_CHANGED == "true"
+                }
+            }
+
             steps {
 
                 withCredentials([
@@ -71,37 +132,51 @@ pipeline {
             }
         }
 
-        stage('Terraform Apply (Manual Approval)') {
+        // -----------------------------------
+        // Terraform Apply
+        // -----------------------------------
+        stage('Terraform Apply') {
+
+            when {
+                expression {
+                    env.INFRA_CHANGED == "true"
+                }
+            }
+
             steps {
 
-                script {
+                input "Apply Terraform Changes?"
 
-                    timeout(time: 10, unit: 'MINUTES') {
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-creds',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]
+                ]) {
 
-                        input message: "Do you want to apply Terraform changes?"
-                    }
+                    dir('infra-repo/terraform') {
 
-                    withCredentials([
-                        [
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: 'aws-creds',
-                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                        ]
-                    ]) {
-
-                        dir('infra-repo/terraform') {
-
-                            sh '''
-                                terraform apply -auto-approve tfplan
-                            '''
-                        }
+                        sh '''
+                            terraform apply -auto-approve tfplan
+                        '''
                     }
                 }
             }
         }
 
+        // -----------------------------------
+        // Configure kubeconfig
+        // -----------------------------------
         stage('Configure kubeconfig') {
+
+            when {
+                expression {
+                    env.INFRA_CHANGED == "true"
+                }
+            }
+
             steps {
 
                 withCredentials([
@@ -122,7 +197,17 @@ pipeline {
             }
         }
 
+        // -----------------------------------
+        // Install ArgoCD
+        // -----------------------------------
         stage('Install ArgoCD') {
+
+            when {
+                expression {
+                    env.INFRA_CHANGED == "true"
+                }
+            }
+
             steps {
 
                 sh '''
@@ -134,6 +219,9 @@ pipeline {
             }
         }
 
+        // -----------------------------------
+        // Build Docker Image
+        // -----------------------------------
         stage('Build Docker Image') {
             steps {
 
@@ -146,7 +234,10 @@ pipeline {
             }
         }
 
-        stage('Push to DockerHub') {
+        // -----------------------------------
+        // Push Docker Image
+        // -----------------------------------
+        stage('Push Docker Image') {
             steps {
 
                 script {
@@ -168,6 +259,9 @@ pipeline {
             }
         }
 
+        // -----------------------------------
+        // ArgoCD Sync
+        // -----------------------------------
         stage('ArgoCD Sync') {
             steps {
 
@@ -182,22 +276,28 @@ pipeline {
 
         failure {
 
-            echo "Pipeline failed. Destroying Terraform infrastructure..."
+            script {
 
-            withCredentials([
-                [
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]
-            ]) {
+                if (env.INFRA_CHANGED == "true") {
 
-                dir('infra-repo/terraform') {
+                    echo "Pipeline failed. Destroying Terraform infrastructure..."
 
-                    sh '''
-                        terraform destroy -auto-approve || true
-                    '''
+                    withCredentials([
+                        [
+                            $class: 'AmazonWebServicesCredentialsBinding',
+                            credentialsId: 'aws-creds',
+                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                        ]
+                    ]) {
+
+                        dir('infra-repo/terraform') {
+
+                            sh '''
+                                terraform destroy -auto-approve || true
+                            '''
+                        }
+                    }
                 }
             }
         }
