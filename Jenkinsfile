@@ -1,8 +1,14 @@
 pipeline {
+
     agent any
 
     environment {
+
         INFRA_CHANGED = "false"
+
+        AWS_REGION = "us-west-2"
+
+        CLUSTER_NAME = "devops-cluster"
     }
 
     stages {
@@ -11,6 +17,7 @@ pipeline {
         // Checkout App Repo
         // -----------------------------------
         stage('Checkout App Repo') {
+
             steps {
 
                 dir('app-repo') {
@@ -26,6 +33,7 @@ pipeline {
         // Checkout Infra Repo
         // -----------------------------------
         stage('Checkout Infra Repo') {
+
             steps {
 
                 dir('infra-repo') {
@@ -41,16 +49,17 @@ pipeline {
         // Detect Terraform Changes
         // -----------------------------------
         stage('Check Infra Changes') {
+
             steps {
 
                 script {
 
                     def infraChanges = sh(
-                        script: """
+                        script: '''
                             cd infra-repo
 
                             git diff --name-only HEAD~1 HEAD | grep terraform || true
-                        """,
+                        ''',
                         returnStdout: true
                     ).trim()
 
@@ -59,8 +68,10 @@ pipeline {
                         env.INFRA_CHANGED = "true"
 
                         echo "Terraform changes detected."
-                    }
-                    else {
+
+                    } else {
+
+                        env.INFRA_CHANGED = "false"
 
                         echo "No Terraform changes detected."
                     }
@@ -145,7 +156,10 @@ pipeline {
 
             steps {
 
-                input "Apply Terraform Changes?"
+                timeout(time: 10, unit: 'MINUTES') {
+
+                    input message: 'Apply Terraform Changes?'
+                }
 
                 withCredentials([
                     [
@@ -190,8 +204,8 @@ pipeline {
 
                     sh '''
                         aws eks update-kubeconfig \
-                        --region us-west-2 \
-                        --name devops-cluster
+                        --region $AWS_REGION \
+                        --name $CLUSTER_NAME
                     '''
                 }
             }
@@ -223,13 +237,17 @@ pipeline {
         // Build Docker Image
         // -----------------------------------
         stage('Build Docker Image') {
+
             steps {
 
-                script {
+                dir('app-repo') {
 
-                    docker.build(
-                        "sejalkatre/flask-app:${env.BUILD_NUMBER}"
-                    )
+                    script {
+
+                        docker.build(
+                            "sejalkatre/flask-app:${env.BUILD_NUMBER}"
+                        )
+                    }
                 }
             }
         }
@@ -238,22 +256,26 @@ pipeline {
         // Push Docker Image
         // -----------------------------------
         stage('Push Docker Image') {
+
             steps {
 
-                script {
+                dir('app-repo') {
 
-                    docker.withRegistry(
-                        'https://index.docker.io/v1/',
-                        'dockerhub-creds'
-                    ) {
+                    script {
 
-                        def app = docker.build(
-                            "sejalkatre/flask-app:${env.BUILD_NUMBER}"
-                        )
+                        docker.withRegistry(
+                            'https://index.docker.io/v1/',
+                            'dockerhub-creds'
+                        ) {
 
-                        app.push()
+                            def app = docker.build(
+                                "sejalkatre/flask-app:${env.BUILD_NUMBER}"
+                            )
 
-                        app.push("latest")
+                            app.push()
+
+                            app.push("latest")
+                        }
                     }
                 }
             }
@@ -263,6 +285,7 @@ pipeline {
         // ArgoCD Sync
         // -----------------------------------
         stage('ArgoCD Sync') {
+
             steps {
 
                 sh '''
@@ -272,6 +295,9 @@ pipeline {
         }
     }
 
+    // -----------------------------------
+    // Post Actions
+    // -----------------------------------
     post {
 
         failure {
