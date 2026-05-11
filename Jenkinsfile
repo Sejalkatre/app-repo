@@ -5,7 +5,9 @@ pipeline {
 
         stage('Checkout App Repo') {
             steps {
+
                 dir('app-repo') {
+
                     git branch: 'main',
                         url: 'https://github.com/Sejalkatre/app-repo.git',
                         credentialsId: 'Github-creds'
@@ -15,7 +17,9 @@ pipeline {
 
         stage('Checkout Infra Repo') {
             steps {
+
                 dir('infra-repo') {
+
                     git branch: 'main',
                         url: 'https://github.com/Sejalkatre/infra-repo.git',
                         credentialsId: 'Github-creds'
@@ -69,9 +73,11 @@ pipeline {
 
         stage('Terraform Apply (Manual Approval)') {
             steps {
+
                 script {
 
                     timeout(time: 10, unit: 'MINUTES') {
+
                         input message: "Do you want to apply Terraform changes?"
                     }
 
@@ -132,7 +138,10 @@ pipeline {
             steps {
 
                 script {
-                    docker.build("sejalkatre/flask-app:${env.BUILD_NUMBER}")
+
+                    docker.build(
+                        "sejalkatre/flask-app:${env.BUILD_NUMBER}"
+                    )
                 }
             }
         }
@@ -166,6 +175,36 @@ pipeline {
                     argocd app sync flask-app || true
                 '''
             }
+        }
+    }
+
+    post {
+
+        failure {
+
+            echo "Pipeline failed. Destroying Terraform infrastructure..."
+
+            withCredentials([
+                [
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]
+            ]) {
+
+                dir('infra-repo/terraform') {
+
+                    sh '''
+                        terraform destroy -auto-approve || true
+                    '''
+                }
+            }
+        }
+
+        success {
+
+            echo "Pipeline completed successfully."
         }
     }
 }
