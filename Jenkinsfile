@@ -172,12 +172,22 @@ pipeline {
 
             steps {
 
-                sh '''
-                    kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-creds',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]
+                ]) {
 
-                    kubectl apply -n argocd -f \
-                    https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-                '''
+                    sh '''
+                        kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+
+                        kubectl apply -n argocd -f \
+                        https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+                    '''
+                }
             }
         }
 
@@ -229,11 +239,21 @@ pipeline {
 
             steps {
 
-                dir('app-repo') {
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-creds',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]
+                ]) {
 
-                    sh '''
-                        kubectl apply -f k8s/
-                    '''
+                    dir('app-repo') {
+
+                        sh '''
+                            kubectl apply -f k8s/
+                        '''
+                    }
                 }
             }
         }
@@ -265,6 +285,34 @@ pipeline {
         failure {
 
             echo 'Pipeline failed.'
+        }
+
+        always {
+
+            script {
+
+                if (currentBuild.currentResult == 'FAILURE') {
+
+                    echo 'Build failed. Destroying infrastructure...'
+
+                    withCredentials([
+                        [
+                            $class: 'AmazonWebServicesCredentialsBinding',
+                            credentialsId: 'aws-creds',
+                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                        ]
+                    ]) {
+
+                        dir('infra-repo/terraform') {
+
+                            sh '''
+                                terraform destroy -auto-approve || true
+                            '''
+                        }
+                    }
+                }
+            }
         }
     }
 }
