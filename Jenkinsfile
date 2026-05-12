@@ -4,8 +4,9 @@ pipeline {
 
     environment {
 
-        AWS_REGION = "us-west-2"
+        AWS_REGION  = "us-west-2"
         CLUSTER_NAME = "devops-cluster"
+        IMAGE_NAME = "sejalkatre/flask-app"
     }
 
     stages {
@@ -58,7 +59,7 @@ pipeline {
                     ]
                 ]) {
 
-                    dir('infra-repo/terraform') {
+                    dir('infra-repo') {
 
                         sh '''
                             terraform init
@@ -75,7 +76,7 @@ pipeline {
 
             steps {
 
-                dir('infra-repo/terraform') {
+                dir('infra-repo') {
 
                     sh '''
                         terraform validate
@@ -100,7 +101,7 @@ pipeline {
                     ]
                 ]) {
 
-                    dir('infra-repo/terraform') {
+                    dir('infra-repo') {
 
                         sh '''
                             terraform plan -out=tfplan
@@ -126,7 +127,7 @@ pipeline {
                     ]
                 ]) {
 
-                    dir('infra-repo/terraform') {
+                    dir('infra-repo') {
 
                         sh '''
                             terraform apply -auto-approve tfplan
@@ -188,9 +189,7 @@ pipeline {
 
                     script {
 
-                        docker.build(
-                            "sejalkatre/flask-app:${env.BUILD_NUMBER}"
-                        )
+                        docker.build("${IMAGE_NAME}:${BUILD_NUMBER}")
                     }
                 }
             }
@@ -212,13 +211,11 @@ pipeline {
                             'dockerhub-creds'
                         ) {
 
-                            def app = docker.build(
-                                "sejalkatre/flask-app:${env.BUILD_NUMBER}"
-                            )
+                            def appImage = docker.image("${IMAGE_NAME}:${BUILD_NUMBER}")
 
-                            app.push()
+                            appImage.push("${BUILD_NUMBER}")
 
-                            app.push("latest")
+                            appImage.push("latest")
                         }
                     }
                 }
@@ -226,30 +223,45 @@ pipeline {
         }
 
         // -----------------------------------
-        // Verify Cluster
+        // Deploy Application
         // -----------------------------------
-        stage('Verify Cluster') {
+        stage('Deploy App') {
 
             steps {
 
                 sh '''
-                    kubectl get nodes
-                    kubectl get pods -A
+                    kubectl apply -f k8s/
+                '''
+            }
+        }
+
+        // -----------------------------------
+        // ArgoCD Sync
+        // -----------------------------------
+        stage('ArgoCD Sync') {
+
+            steps {
+
+                sh '''
+                    argocd app sync flask-app || true
                 '''
             }
         }
     }
 
+    // -----------------------------------
+    // Post Actions
+    // -----------------------------------
     post {
 
         success {
 
-            echo "Pipeline completed successfully."
+            echo 'Pipeline completed successfully.'
         }
 
         failure {
 
-            echo "Pipeline failed."
+            echo 'Pipeline failed.'
         }
     }
 }
