@@ -58,7 +58,7 @@ pipeline {
                         script: '''
                             cd infra-repo
 
-                            git diff --name-only HEAD~1 HEAD | grep terraform || true
+                            git show --name-only --pretty="" HEAD | grep ".tf" || true
                         ''',
                         returnStdout: true
                     ).trim()
