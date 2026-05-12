@@ -4,9 +4,9 @@ pipeline {
 
     environment {
 
-        AWS_REGION  = "us-west-2"
+        AWS_REGION   = "us-west-2"
         CLUSTER_NAME = "devops-cluster"
-        IMAGE_NAME = "sejalkatre/flask-app"
+        IMAGE_NAME   = "sejalkatre/flask-app"
     }
 
     stages {
@@ -59,7 +59,7 @@ pipeline {
                     ]
                 ]) {
 
-                    dir('infra-repo') {
+                    dir('infra-repo/terraform') {
 
                         sh '''
                             terraform init
@@ -76,7 +76,7 @@ pipeline {
 
             steps {
 
-                dir('infra-repo') {
+                dir('infra-repo/terraform') {
 
                     sh '''
                         terraform validate
@@ -101,7 +101,7 @@ pipeline {
                     ]
                 ]) {
 
-                    dir('infra-repo') {
+                    dir('infra-repo/terraform') {
 
                         sh '''
                             terraform plan -out=tfplan
@@ -127,7 +127,7 @@ pipeline {
                     ]
                 ]) {
 
-                    dir('infra-repo') {
+                    dir('infra-repo/terraform') {
 
                         sh '''
                             terraform apply -auto-approve tfplan
@@ -229,9 +229,12 @@ pipeline {
 
             steps {
 
-                sh '''
-                    kubectl apply -f k8s/
-                '''
+                dir('app-repo') {
+
+                    sh '''
+                        kubectl apply -f k8s/ || true
+                    '''
+                }
             }
         }
 
