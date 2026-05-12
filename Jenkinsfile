@@ -4,10 +4,7 @@ pipeline {
 
     environment {
 
-        INFRA_CHANGED = "false"
-
         AWS_REGION = "us-west-2"
-
         CLUSTER_NAME = "devops-cluster"
     }
 
@@ -46,49 +43,9 @@ pipeline {
         }
 
         // -----------------------------------
-        // Detect Terraform Changes
-        // -----------------------------------
-        stage('Check Infra Changes') {
-
-            steps {
-
-                script {
-
-                    def infraChanges = sh(
-                        script: '''
-                            cd infra-repo
-
-                            git show --name-only --pretty="" HEAD | grep ".tf" || true
-                        ''',
-                        returnStdout: true
-                    ).trim()
-
-                    if (infraChanges) {
-
-                        env.INFRA_CHANGED = "true"
-
-                        echo "Terraform changes detected."
-
-                    } else {
-
-                        env.INFRA_CHANGED = "false"
-
-                        echo "No Terraform changes detected."
-                    }
-                }
-            }
-        }
-
-        // -----------------------------------
         // Terraform Init
         // -----------------------------------
         stage('Terraform Init') {
-
-            when {
-                expression {
-                    env.INFRA_CHANGED == "true"
-                }
-            }
 
             steps {
 
@@ -112,15 +69,25 @@ pipeline {
         }
 
         // -----------------------------------
+        // Terraform Validate
+        // -----------------------------------
+        stage('Terraform Validate') {
+
+            steps {
+
+                dir('infra-repo/terraform') {
+
+                    sh '''
+                        terraform validate
+                    '''
+                }
+            }
+        }
+
+        // -----------------------------------
         // Terraform Plan
         // -----------------------------------
         stage('Terraform Plan') {
-
-            when {
-                expression {
-                    env.INFRA_CHANGED == "true"
-                }
-            }
 
             steps {
 
@@ -148,18 +115,7 @@ pipeline {
         // -----------------------------------
         stage('Terraform Apply') {
 
-            when {
-                expression {
-                    env.INFRA_CHANGED == "true"
-                }
-            }
-
             steps {
-
-                timeout(time: 10, unit: 'MINUTES') {
-
-                    input message: 'Apply Terraform Changes?'
-                }
 
                 withCredentials([
                     [
@@ -185,12 +141,6 @@ pipeline {
         // -----------------------------------
         stage('Configure kubeconfig') {
 
-            when {
-                expression {
-                    env.INFRA_CHANGED == "true"
-                }
-            }
-
             steps {
 
                 withCredentials([
@@ -215,12 +165,6 @@ pipeline {
         // Install ArgoCD
         // -----------------------------------
         stage('Install ArgoCD') {
-
-            when {
-                expression {
-                    env.INFRA_CHANGED == "true"
-                }
-            }
 
             steps {
 
@@ -282,55 +226,30 @@ pipeline {
         }
 
         // -----------------------------------
-        // ArgoCD Sync
+        // Verify Cluster
         // -----------------------------------
-        stage('ArgoCD Sync') {
+        stage('Verify Cluster') {
 
             steps {
 
                 sh '''
-                    argocd app sync flask-app || true
+                    kubectl get nodes
+                    kubectl get pods -A
                 '''
             }
         }
     }
 
-    // -----------------------------------
-    // Post Actions
-    // -----------------------------------
     post {
-
-        failure {
-
-            script {
-
-                if (env.INFRA_CHANGED == "true") {
-
-                    echo "Pipeline failed. Destroying Terraform infrastructure..."
-
-                    withCredentials([
-                        [
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: 'aws-creds',
-                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                        ]
-                    ]) {
-
-                        dir('infra-repo/terraform') {
-
-                            sh '''
-                                terraform destroy -auto-approve || true
-                            '''
-                        }
-                    }
-                }
-            }
-        }
 
         success {
 
             echo "Pipeline completed successfully."
+        }
+
+        failure {
+
+            echo "Pipeline failed."
         }
     }
 }
