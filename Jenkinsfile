@@ -62,7 +62,10 @@ pipeline {
                     dir('infra-repo/terraform') {
 
                         sh '''
-                            terraform init
+                            rm -rf .terraform
+                            rm -f .terraform.lock.hcl
+
+                            terraform init -upgrade
                         '''
                     }
                 }
@@ -170,7 +173,7 @@ pipeline {
             steps {
 
                 sh '''
-                    kubectl create namespace argocd || true
+                    kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
 
                     kubectl apply -n argocd -f \
                     https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
@@ -202,21 +205,18 @@ pipeline {
 
             steps {
 
-                dir('app-repo') {
+                script {
 
-                    script {
+                    docker.withRegistry(
+                        'https://index.docker.io/v1/',
+                        'dockerhub-creds'
+                    ) {
 
-                        docker.withRegistry(
-                            'https://index.docker.io/v1/',
-                            'dockerhub-creds'
-                        ) {
+                        def appImage = docker.image("${IMAGE_NAME}:${BUILD_NUMBER}")
 
-                            def appImage = docker.image("${IMAGE_NAME}:${BUILD_NUMBER}")
+                        appImage.push("${BUILD_NUMBER}")
 
-                            appImage.push("${BUILD_NUMBER}")
-
-                            appImage.push("latest")
-                        }
+                        appImage.push("latest")
                     }
                 }
             }
@@ -232,7 +232,7 @@ pipeline {
                 dir('app-repo') {
 
                     sh '''
-                        kubectl apply -f k8s/ || true
+                        kubectl apply -f k8s/
                     '''
                 }
             }
