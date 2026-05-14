@@ -253,14 +253,16 @@ pipeline {
                         kubectl create namespace argocd \
                         --dry-run=client -o yaml | kubectl apply -f -
 
-                        kubectl apply \
-                        --server-side \
-                        -n argocd \
-                        -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+                        kubectl apply --server-side -n argocd -f \
+                        https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
-                        kubectl rollout status deployment/argocd-server \
+                        sleep 60
+
+                        kubectl wait \
+                        --for=condition=available \
+                        deployment/argocd-server \
                         -n argocd \
-                        --timeout=300s
+                        --timeout=600s
 
                     '''
                 }
@@ -306,7 +308,7 @@ pipeline {
 
                     script {
 
-                        def appImage = docker.build("${IMAGE_NAME}:${BUILD_NUMBER}")
+                        docker.build("${IMAGE_NAME}:${BUILD_NUMBER}")
 
                     }
                 }
@@ -375,6 +377,25 @@ pipeline {
         failure {
 
             echo 'Pipeline failed.'
+
+            withCredentials([[
+                $class: 'AmazonWebServicesCredentialsBinding',
+                credentialsId: 'aws-creds',
+                accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+            ]]) {
+
+                dir('infra-repo/terraform') {
+
+                    sh '''
+
+                        export AWS_DEFAULT_REGION=$AWS_REGION
+
+                        terraform destroy -auto-approve || true
+
+                    '''
+                }
+            }
         }
     }
 }
