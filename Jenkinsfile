@@ -7,6 +7,11 @@ pipeline {
         AWS_REGION   = "us-west-2"
         CLUSTER_NAME = "devops-cluster"
         IMAGE_NAME   = "sejalkatre/flask-app"
+
+        INFRA_CHANGED = "0"
+        APP_CHANGED   = "0"
+
+        KUBECONFIG = "/var/lib/jenkins/.kube/config"
     }
 
     options {
@@ -90,9 +95,9 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    echo "INFRA_CHANGED = ${env.INFRA_CHANGED}"
+                    echo "INFRA_CHANGED=${env.INFRA_CHANGED}"
 
-                    echo "APP_CHANGED = ${env.APP_CHANGED}"
+                    echo "APP_CHANGED=${env.APP_CHANGED}"
                 }
             }
         }
@@ -105,10 +110,7 @@ pipeline {
 
             when {
 
-                expression {
-
-                    env.INFRA_CHANGED != "0"
-                }
+                expression { env.INFRA_CHANGED != "0" }
             }
 
             steps {
@@ -123,6 +125,8 @@ pipeline {
                     dir('infra-repo/terraform') {
 
                         sh '''
+
+                            export AWS_DEFAULT_REGION=$AWS_REGION
 
                             terraform init
 
@@ -140,10 +144,7 @@ pipeline {
 
             when {
 
-                expression {
-
-                    env.INFRA_CHANGED != "0"
-                }
+                expression { env.INFRA_CHANGED != "0" }
             }
 
             steps {
@@ -167,10 +168,7 @@ pipeline {
 
             when {
 
-                expression {
-
-                    env.INFRA_CHANGED != "0"
-                }
+                expression { env.INFRA_CHANGED != "0" }
             }
 
             steps {
@@ -186,34 +184,12 @@ pipeline {
 
                         sh '''
 
+                            export AWS_DEFAULT_REGION=$AWS_REGION
+
                             terraform plan -out=tfplan
 
                         '''
                     }
-                }
-            }
-        }
-
-        // =====================================================
-        // Manual Approval
-        // =====================================================
-
-        stage('Manual Approval') {
-
-            when {
-
-                expression {
-
-                    env.INFRA_CHANGED != "0"
-                }
-            }
-
-            steps {
-
-                timeout(time: 10, unit: 'MINUTES') {
-
-                    input message: 'Approve Terraform Apply?',
-                          ok: 'Apply'
                 }
             }
         }
@@ -226,10 +202,7 @@ pipeline {
 
             when {
 
-                expression {
-
-                    env.INFRA_CHANGED != "0"
-                }
+                expression { env.INFRA_CHANGED != "0" }
             }
 
             steps {
@@ -244,6 +217,8 @@ pipeline {
                     dir('infra-repo/terraform') {
 
                         sh '''
+
+                            export AWS_DEFAULT_REGION=$AWS_REGION
 
                             terraform apply -auto-approve tfplan
 
@@ -261,15 +236,12 @@ pipeline {
 
             when {
 
-                expression {
-
-                    env.INFRA_CHANGED != "0"
-                }
+                expression { env.INFRA_CHANGED != "0" }
             }
 
             steps {
 
-                sleep(time: 120, unit: 'SECONDS')
+                sleep(time: 180, unit: 'SECONDS')
             }
         }
 
@@ -289,6 +261,8 @@ pipeline {
                 ]]) {
 
                     sh '''
+
+                        export AWS_DEFAULT_REGION=$AWS_REGION
 
                         mkdir -p ~/.kube
 
@@ -311,10 +285,7 @@ pipeline {
 
             when {
 
-                expression {
-
-                    env.INFRA_CHANGED != "0"
-                }
+                expression { env.INFRA_CHANGED != "0" }
             }
 
             steps {
@@ -328,14 +299,19 @@ pipeline {
 
                     sh '''
 
+                        export AWS_DEFAULT_REGION=$AWS_REGION
+                        export KUBECONFIG=$HOME/.kube/config
+
                         kubectl create namespace argocd \
                         --dry-run=client -o yaml | kubectl apply -f -
 
                         kubectl apply -n argocd -f \
                         https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
-                        kubectl rollout status deployment/argocd-server \
-                        -n argocd --timeout=300s
+                        kubectl wait --for=condition=available \
+                        deployment/argocd-server \
+                        -n argocd \
+                        --timeout=300s
 
                     '''
                 }
@@ -350,10 +326,7 @@ pipeline {
 
             when {
 
-                expression {
-
-                    env.INFRA_CHANGED != "0"
-                }
+                expression { env.INFRA_CHANGED != "0" }
             }
 
             steps {
@@ -368,6 +341,9 @@ pipeline {
                     dir('infra-repo/argocd') {
 
                         sh '''
+
+                            export AWS_DEFAULT_REGION=$AWS_REGION
+                            export KUBECONFIG=$HOME/.kube/config
 
                             kubectl apply -f application.yaml
 
@@ -385,10 +361,7 @@ pipeline {
 
             when {
 
-                expression {
-
-                    env.APP_CHANGED != "0"
-                }
+                expression { env.APP_CHANGED != "0" }
             }
 
             steps {
@@ -411,10 +384,7 @@ pipeline {
 
             when {
 
-                expression {
-
-                    env.APP_CHANGED != "0"
-                }
+                expression { env.APP_CHANGED != "0" }
             }
 
             steps {
@@ -437,41 +407,6 @@ pipeline {
         }
 
         // =====================================================
-        // Deploy Kubernetes Manifests
-        // =====================================================
-
-        stage('Deploy Application') {
-
-            when {
-
-                expression {
-
-                    env.APP_CHANGED != "0" || env.INFRA_CHANGED != "0"
-                }
-            }
-
-            steps {
-
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
-
-                    dir('infra-repo/manifests') {
-
-                        sh '''
-
-                            kubectl apply -f .
-
-                        '''
-                    }
-                }
-            }
-        }
-
-        // =====================================================
         // Verify Deployment
         // =====================================================
 
@@ -488,6 +423,9 @@ pipeline {
 
                     sh '''
 
+                        export AWS_DEFAULT_REGION=$AWS_REGION
+                        export KUBECONFIG=$HOME/.kube/config
+
                         kubectl get nodes
 
                         kubectl get pods -A
@@ -501,6 +439,10 @@ pipeline {
             }
         }
     }
+
+    // =====================================================
+    // Destroy ONLY on Failure
+    // =====================================================
 
     post {
 
@@ -527,6 +469,8 @@ pipeline {
                         dir('infra-repo/terraform') {
 
                             sh '''
+
+                                export AWS_DEFAULT_REGION=$AWS_REGION
 
                                 terraform destroy -auto-approve || true
 
