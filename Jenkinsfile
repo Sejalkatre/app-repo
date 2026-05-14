@@ -45,43 +45,13 @@ pipeline {
         }
 
         // =====================================================
-        // INIT AWS + KUBE ACCESS ONCE (IMPORTANT FIX)
+        // TERRAFORM (CREATE EKS FIRST)
         // =====================================================
-        stage('Setup AWS & Kubeconfig') {
-
-            steps {
-
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
-
-                    sh '''
-                        export AWS_DEFAULT_REGION=$AWS_REGION
-
-                        aws sts get-caller-identity
-
-                        mkdir -p ~/.kube
-
-                        aws eks update-kubeconfig \
-                            --region $AWS_REGION \
-                            --name $CLUSTER_NAME
-
-                        kubectl get nodes
-                    '''
-                }
-            }
-        }
 
         stage('Terraform Init') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
                 ]]) {
 
                     dir('infra-repo/terraform') {
@@ -104,8 +74,7 @@ pipeline {
 
         stage('Terraform Plan') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding',
                     credentialsId: 'aws-creds'
                 ]]) {
 
@@ -121,8 +90,7 @@ pipeline {
 
         stage('Terraform Apply') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding',
                     credentialsId: 'aws-creds'
                 ]]) {
 
@@ -136,41 +104,70 @@ pipeline {
             }
         }
 
+        // =====================================================
+        // WAIT FOR EKS
+        // =====================================================
+
         stage('Wait For EKS') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding',
                     credentialsId: 'aws-creds'
                 ]]) {
 
                     sh '''
+                        export AWS_DEFAULT_REGION=$AWS_REGION
+
                         aws eks wait cluster-active \
-                        --region $AWS_REGION \
-                        --name $CLUSTER_NAME
+                            --region $AWS_REGION \
+                            --name $CLUSTER_NAME
                     '''
                 }
             }
         }
 
-        stage('Install ArgoCD') {
+        // =====================================================
+        // CONFIGURE KUBECONFIG (IMPORTANT FIX)
+        // =====================================================
+
+        stage('Configure kubeconfig') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding',
                     credentialsId: 'aws-creds'
                 ]]) {
 
                     sh '''
-                        kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+                        export AWS_DEFAULT_REGION=$AWS_REGION
 
-                        kubectl apply -n argocd -f \
-                        https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+                        mkdir -p ~/.kube
 
-                        sleep 60
+                        aws eks list-clusters --region $AWS_REGION
+                        aws eks update-kubeconfig \
+                            --region $AWS_REGION \
+                            --name $CLUSTER_NAME
 
-                        kubectl wait --for=condition=available deployment/argocd-server \
-                        -n argocd --timeout=600s
+                        kubectl get nodes
                     '''
                 }
+            }
+        }
+
+        // =====================================================
+        // ARGOCD INSTALL
+        // =====================================================
+
+        stage('Install ArgoCD') {
+            steps {
+                sh '''
+                    kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+
+                    kubectl apply -n argocd -f \
+                    https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+                    sleep 60
+
+                    kubectl wait --for=condition=available deployment/argocd-server \
+                    -n argocd --timeout=600s
+                '''
             }
         }
 
@@ -183,6 +180,10 @@ pipeline {
                 }
             }
         }
+
+        // =====================================================
+        // DOCKER BUILD & PUSH
+        // =====================================================
 
         stage('Build Docker Image') {
             steps {
@@ -209,6 +210,10 @@ pipeline {
             }
         }
 
+        // =====================================================
+        // VERIFY DEPLOYMENT
+        // =====================================================
+
         stage('Verify Deployment') {
             steps {
                 sh '''
@@ -230,16 +235,11 @@ pipeline {
         failure {
             echo 'Pipeline failed.'
 
-            withCredentials([[
-                $class: 'AmazonWebServicesCredentialsBinding',
-                credentialsId: 'aws-creds'
-            ]]) {
-
-                dir('infra-repo/terraform') {
-                    sh '''
-                        terraform destroy -auto-approve || true
-                    '''
-                }
+            dir('infra-repo/terraform') {
+                sh '''
+                    terraform init
+                    terraform destroy -auto-approve || true
+                '''
             }
         }
     }
