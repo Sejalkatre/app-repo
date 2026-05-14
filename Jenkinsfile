@@ -179,15 +179,23 @@ pipeline {
 
             steps {
 
-                sh '''
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
 
-                    export AWS_DEFAULT_REGION=$AWS_REGION
+                    sh '''
 
-                    aws eks wait cluster-active \
-                    --region $AWS_REGION \
-                    --name $CLUSTER_NAME
+                        export AWS_DEFAULT_REGION=$AWS_REGION
 
-                '''
+                        aws eks wait cluster-active \
+                        --region $AWS_REGION \
+                        --name $CLUSTER_NAME
+
+                    '''
+                }
             }
         }
 
@@ -354,7 +362,7 @@ pipeline {
     }
 
     // =====================================================
-    // Destroy ONLY on Failure
+    // Post Actions
     // =====================================================
 
     post {
@@ -367,25 +375,6 @@ pipeline {
         failure {
 
             echo 'Pipeline failed.'
-
-            withCredentials([[
-                $class: 'AmazonWebServicesCredentialsBinding',
-                credentialsId: 'aws-creds',
-                accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-            ]]) {
-
-                dir('infra-repo/terraform') {
-
-                    sh '''
-
-                        export AWS_DEFAULT_REGION=$AWS_REGION
-
-                        terraform destroy -auto-approve || true
-
-                    '''
-                }
-            }
         }
     }
 }
