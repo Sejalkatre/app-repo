@@ -12,35 +12,21 @@ pipeline {
     }
 
     options {
-
         timestamps()
         disableConcurrentBuilds()
     }
 
     stages {
 
-        // =====================================================
-        // Clean Workspace
-        // =====================================================
-
         stage('Clean Workspace') {
-
             steps {
-
                 cleanWs()
             }
         }
 
-        // =====================================================
-        // Checkout App Repo
-        // =====================================================
-
         stage('Checkout App Repo') {
-
             steps {
-
                 dir('app-repo') {
-
                     git branch: 'main',
                         credentialsId: 'Github-creds',
                         url: 'https://github.com/Sejalkatre/app-repo.git'
@@ -48,16 +34,9 @@ pipeline {
             }
         }
 
-        // =====================================================
-        // Checkout Infra Repo
-        // =====================================================
-
         stage('Checkout Infra Repo') {
-
             steps {
-
                 dir('infra-repo') {
-
                     git branch: 'main',
                         credentialsId: 'Github-creds',
                         url: 'https://github.com/Sejalkatre/infra-repo.git'
@@ -66,116 +45,9 @@ pipeline {
         }
 
         // =====================================================
-        // Terraform Init
+        // INIT AWS + KUBE ACCESS ONCE (IMPORTANT FIX)
         // =====================================================
-
-        stage('Terraform Init') {
-
-            steps {
-
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
-
-                    dir('infra-repo/terraform') {
-
-                        sh '''
-
-                            export AWS_DEFAULT_REGION=$AWS_REGION
-
-                            terraform init
-
-                        '''
-                    }
-                }
-            }
-        }
-
-        // =====================================================
-        // Terraform Validate
-        // =====================================================
-
-        stage('Terraform Validate') {
-
-            steps {
-
-                dir('infra-repo/terraform') {
-
-                    sh '''
-
-                        terraform validate
-
-                    '''
-                }
-            }
-        }
-
-        // =====================================================
-        // Terraform Plan
-        // =====================================================
-
-        stage('Terraform Plan') {
-
-            steps {
-
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
-
-                    dir('infra-repo/terraform') {
-
-                        sh '''
-
-                            export AWS_DEFAULT_REGION=$AWS_REGION
-
-                            terraform plan -out=tfplan
-
-                        '''
-                    }
-                }
-            }
-        }
-
-        // =====================================================
-        // Terraform Apply
-        // =====================================================
-
-        stage('Terraform Apply') {
-
-            steps {
-
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
-
-                    dir('infra-repo/terraform') {
-
-                        sh '''
-
-                            export AWS_DEFAULT_REGION=$AWS_REGION
-
-                            terraform apply -auto-approve tfplan
-
-                        '''
-                    }
-                }
-            }
-        }
-
-        // =====================================================
-        // Wait For EKS
-        // =====================================================
-
-        stage('Wait For EKS') {
+        stage('Setup AWS & Kubeconfig') {
 
             steps {
 
@@ -187,58 +59,24 @@ pipeline {
                 ]]) {
 
                     sh '''
-
                         export AWS_DEFAULT_REGION=$AWS_REGION
 
-                        aws eks wait cluster-active \
-                        --region $AWS_REGION \
-                        --name $CLUSTER_NAME
-
-                    '''
-                }
-            }
-        }
-
-        // =====================================================
-        // Configure kubeconfig
-        // =====================================================
-
-        stage('Configure kubeconfig') {
-
-            steps {
-
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
-
-                    sh '''
-
-                        export AWS_DEFAULT_REGION=$AWS_REGION
+                        aws sts get-caller-identity
 
                         mkdir -p ~/.kube
 
                         aws eks update-kubeconfig \
-                        --region $AWS_REGION \
-                        --name $CLUSTER_NAME
+                            --region $AWS_REGION \
+                            --name $CLUSTER_NAME
 
                         kubectl get nodes
-
                     '''
                 }
             }
         }
 
-        // =====================================================
-        // Install ArgoCD
-        // =====================================================
-
-        stage('Install ArgoCD') {
-
+        stage('Terraform Init') {
             steps {
-
                 withCredentials([[
                     $class: 'AmazonWebServicesCredentialsBinding',
                     credentialsId: 'aws-creds',
@@ -246,166 +84,160 @@ pipeline {
                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
                 ]]) {
 
-                    sh '''
-
-                        export AWS_DEFAULT_REGION=$AWS_REGION
-
-                        kubectl create namespace argocd \
-                        --dry-run=client -o yaml | kubectl apply -f -
-
-                        kubectl apply --server-side -n argocd -f \
-                        https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-
-                        sleep 60
-
-                        kubectl wait \
-                        --for=condition=available \
-                        deployment/argocd-server \
-                        -n argocd \
-                        --timeout=600s
-
-                    '''
-                }
-            }
-        }
-
-        // =====================================================
-        // Apply ArgoCD Application
-        // =====================================================
-
-        stage('Apply ArgoCD Application') {
-
-            steps {
-
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
-
-                    dir('infra-repo/argocd') {
-
+                    dir('infra-repo/terraform') {
                         sh '''
-
-                            kubectl apply -f application.yaml
-
+                            export AWS_DEFAULT_REGION=$AWS_REGION
+                            terraform init
                         '''
                     }
                 }
             }
         }
 
-        // =====================================================
-        // Build Docker Image
-        // =====================================================
-
-        stage('Build Docker Image') {
-
+        stage('Terraform Validate') {
             steps {
+                dir('infra-repo/terraform') {
+                    sh 'terraform validate'
+                }
+            }
+        }
 
-                dir('app-repo') {
+        stage('Terraform Plan') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
 
-                    script {
-
-                        docker.build("${IMAGE_NAME}:${BUILD_NUMBER}")
-
+                    dir('infra-repo/terraform') {
+                        sh '''
+                            export AWS_DEFAULT_REGION=$AWS_REGION
+                            terraform plan -out=tfplan
+                        '''
                     }
                 }
             }
         }
 
-        // =====================================================
-        // Push Docker Image
-        // =====================================================
+        stage('Terraform Apply') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
+
+                    dir('infra-repo/terraform') {
+                        sh '''
+                            export AWS_DEFAULT_REGION=$AWS_REGION
+                            terraform apply -auto-approve tfplan
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Wait For EKS') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
+
+                    sh '''
+                        aws eks wait cluster-active \
+                        --region $AWS_REGION \
+                        --name $CLUSTER_NAME
+                    '''
+                }
+            }
+        }
+
+        stage('Install ArgoCD') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
+
+                    sh '''
+                        kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+
+                        kubectl apply -n argocd -f \
+                        https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+                        sleep 60
+
+                        kubectl wait --for=condition=available deployment/argocd-server \
+                        -n argocd --timeout=600s
+                    '''
+                }
+            }
+        }
+
+        stage('Apply ArgoCD Application') {
+            steps {
+                dir('infra-repo/argocd') {
+                    sh '''
+                        kubectl apply -f application.yaml
+                    '''
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                dir('app-repo') {
+                    script {
+                        docker.build("${IMAGE_NAME}:${BUILD_NUMBER}")
+                    }
+                }
+            }
+        }
 
         stage('Push Docker Image') {
-
             steps {
-
                 script {
-
                     docker.withRegistry(
                         'https://index.docker.io/v1/',
                         'dockerhub-creds'
                     ) {
-
                         def appImage = docker.image("${IMAGE_NAME}:${BUILD_NUMBER}")
-
                         appImage.push("${BUILD_NUMBER}")
-
                         appImage.push("latest")
                     }
                 }
             }
         }
 
-         // =====================================================
-        // Verify Deployment
-        // =====================================================
-
         stage('Verify Deployment') {
-
             steps {
-
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
-
-                    sh '''
-
-                        export AWS_DEFAULT_REGION=$AWS_REGION
-
-                        aws eks update-kubeconfig \
-                        --region $AWS_REGION \
-                        --name $CLUSTER_NAME
-
-                        kubectl get nodes
-
-                        kubectl get pods -A
-
-                        kubectl get svc -A
-
-                        kubectl get ingress -A
-
-                    '''
-                }
+                sh '''
+                    kubectl get nodes
+                    kubectl get pods -A
+                    kubectl get svc -A
+                    kubectl get ingress -A
+                '''
             }
         }
-
-    // =====================================================
-    // Post Actions
-    // =====================================================
+    }
 
     post {
 
         success {
-
             echo 'Pipeline completed successfully.'
         }
 
         failure {
-
             echo 'Pipeline failed.'
 
             withCredentials([[
                 $class: 'AmazonWebServicesCredentialsBinding',
-                credentialsId: 'aws-creds',
-                accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                credentialsId: 'aws-creds'
             ]]) {
 
                 dir('infra-repo/terraform') {
-
                     sh '''
-
-                        export AWS_DEFAULT_REGION=$AWS_REGION
-
                         terraform destroy -auto-approve || true
-
                     '''
                 }
             }
