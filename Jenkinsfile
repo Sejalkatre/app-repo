@@ -8,16 +8,12 @@ pipeline {
         CLUSTER_NAME = "devops-cluster"
         IMAGE_NAME   = "sejalkatre/flask-app"
 
-        INFRA_CHANGED = "0"
-        APP_CHANGED   = "0"
-
         KUBECONFIG = "/var/lib/jenkins/.kube/config"
     }
 
     options {
 
         timestamps()
-
         disableConcurrentBuilds()
     }
 
@@ -70,48 +66,10 @@ pipeline {
         }
 
         // =====================================================
-        // Detect Changes
-        // =====================================================
-
-        stage('Detect Changes') {
-
-            steps {
-
-                script {
-
-                    env.INFRA_CHANGED = sh(
-                        script: '''
-                            cd infra-repo
-                            git diff --name-only HEAD~1 HEAD | wc -l
-                        ''',
-                        returnStdout: true
-                    ).trim()
-
-                    env.APP_CHANGED = sh(
-                        script: '''
-                            cd app-repo
-                            git diff --name-only HEAD~1 HEAD | wc -l
-                        ''',
-                        returnStdout: true
-                    ).trim()
-
-                    echo "INFRA_CHANGED=${env.INFRA_CHANGED}"
-
-                    echo "APP_CHANGED=${env.APP_CHANGED}"
-                }
-            }
-        }
-
-        // =====================================================
         // Terraform Init
         // =====================================================
 
         stage('Terraform Init') {
-
-            when {
-
-                expression { env.INFRA_CHANGED != "0" }
-            }
 
             steps {
 
@@ -142,11 +100,6 @@ pipeline {
 
         stage('Terraform Validate') {
 
-            when {
-
-                expression { env.INFRA_CHANGED != "0" }
-            }
-
             steps {
 
                 dir('infra-repo/terraform') {
@@ -165,11 +118,6 @@ pipeline {
         // =====================================================
 
         stage('Terraform Plan') {
-
-            when {
-
-                expression { env.INFRA_CHANGED != "0" }
-            }
 
             steps {
 
@@ -200,11 +148,6 @@ pipeline {
 
         stage('Terraform Apply') {
 
-            when {
-
-                expression { env.INFRA_CHANGED != "0" }
-            }
-
             steps {
 
                 withCredentials([[
@@ -234,14 +177,17 @@ pipeline {
 
         stage('Wait For EKS') {
 
-            when {
-
-                expression { env.INFRA_CHANGED != "0" }
-            }
-
             steps {
 
-                sleep(time: 180, unit: 'SECONDS')
+                sh '''
+
+                    export AWS_DEFAULT_REGION=$AWS_REGION
+
+                    aws eks wait cluster-active \
+                    --region $AWS_REGION \
+                    --name $CLUSTER_NAME
+
+                '''
             }
         }
 
@@ -283,11 +229,6 @@ pipeline {
 
         stage('Install ArgoCD') {
 
-            when {
-
-                expression { env.INFRA_CHANGED != "0" }
-            }
-
             steps {
 
                 withCredentials([[
@@ -300,7 +241,6 @@ pipeline {
                     sh '''
 
                         export AWS_DEFAULT_REGION=$AWS_REGION
-                        export KUBECONFIG=$HOME/.kube/config
 
                         kubectl create namespace argocd \
                         --dry-run=client -o yaml | kubectl apply -f -
@@ -308,7 +248,8 @@ pipeline {
                         kubectl apply -n argocd -f \
                         https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
-                        kubectl wait --for=condition=available \
+                        kubectl wait \
+                        --for=condition=available \
                         deployment/argocd-server \
                         -n argocd \
                         --timeout=300s
@@ -324,11 +265,6 @@ pipeline {
 
         stage('Apply ArgoCD Application') {
 
-            when {
-
-                expression { env.INFRA_CHANGED != "0" }
-            }
-
             steps {
 
                 withCredentials([[
@@ -341,9 +277,6 @@ pipeline {
                     dir('infra-repo/argocd') {
 
                         sh '''
-
-                            export AWS_DEFAULT_REGION=$AWS_REGION
-                            export KUBECONFIG=$HOME/.kube/config
 
                             kubectl apply -f application.yaml
 
@@ -359,18 +292,14 @@ pipeline {
 
         stage('Build Docker Image') {
 
-            when {
-
-                expression { env.APP_CHANGED != "0" }
-            }
-
             steps {
 
                 dir('app-repo') {
 
                     script {
 
-                        docker.build("${IMAGE_NAME}:${BUILD_NUMBER}")
+                        def appImage = docker.build("${IMAGE_NAME}:${BUILD_NUMBER}")
+
                     }
                 }
             }
@@ -381,11 +310,6 @@ pipeline {
         // =====================================================
 
         stage('Push Docker Image') {
-
-            when {
-
-                expression { env.APP_CHANGED != "0" }
-            }
 
             steps {
 
@@ -414,28 +338,17 @@ pipeline {
 
             steps {
 
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
+                sh '''
 
-                    sh '''
+                    kubectl get nodes
 
-                        export AWS_DEFAULT_REGION=$AWS_REGION
-                        export KUBECONFIG=$HOME/.kube/config
+                    kubectl get pods -A
 
-                        kubectl get nodes
+                    kubectl get svc -A
 
-                        kubectl get pods -A
+                    kubectl get ingress -A
 
-                        kubectl get svc -A
-
-                        kubectl get ingress -A
-
-                    '''
-                }
+                '''
             }
         }
     }
@@ -455,28 +368,22 @@ pipeline {
 
             echo 'Pipeline failed.'
 
-            script {
+            withCredentials([[
+                $class: 'AmazonWebServicesCredentialsBinding',
+                credentialsId: 'aws-creds',
+                accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+            ]]) {
 
-                if (env.INFRA_CHANGED != "0") {
+                dir('infra-repo/terraform') {
 
-                    withCredentials([[
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: 'aws-creds',
-                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                    ]]) {
+                    sh '''
 
-                        dir('infra-repo/terraform') {
+                        export AWS_DEFAULT_REGION=$AWS_REGION
 
-                            sh '''
+                        terraform destroy -auto-approve || true
 
-                                export AWS_DEFAULT_REGION=$AWS_REGION
-
-                                terraform destroy -auto-approve || true
-
-                            '''
-                        }
-                    }
+                    '''
                 }
             }
         }
