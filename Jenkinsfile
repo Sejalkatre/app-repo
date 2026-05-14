@@ -7,9 +7,6 @@ pipeline {
         AWS_REGION   = "us-west-2"
         CLUSTER_NAME = "devops-cluster"
         IMAGE_NAME   = "sejalkatre/flask-app"
-
-        INFRA_CHANGED = "false"
-        APP_CHANGED   = "false"
     }
 
     options {
@@ -77,25 +74,25 @@ pipeline {
 
                 script {
 
-                    INFRA_CHANGED = sh(
-                        script: """
+                    env.INFRA_CHANGED = sh(
+                        script: '''
                             cd infra-repo
                             git diff --name-only HEAD~1 HEAD | wc -l
-                        """,
+                        ''',
                         returnStdout: true
                     ).trim()
 
-                    APP_CHANGED = sh(
-                        script: """
+                    env.APP_CHANGED = sh(
+                        script: '''
                             cd app-repo
                             git diff --name-only HEAD~1 HEAD | wc -l
-                        """,
+                        ''',
                         returnStdout: true
                     ).trim()
 
-                    echo "INFRA_CHANGED = ${INFRA_CHANGED}"
+                    echo "INFRA_CHANGED = ${env.INFRA_CHANGED}"
 
-                    echo "APP_CHANGED = ${APP_CHANGED}"
+                    echo "APP_CHANGED = ${env.APP_CHANGED}"
                 }
             }
         }
@@ -110,7 +107,7 @@ pipeline {
 
                 expression {
 
-                    INFRA_CHANGED != "0"
+                    env.INFRA_CHANGED != "0"
                 }
             }
 
@@ -145,7 +142,7 @@ pipeline {
 
                 expression {
 
-                    INFRA_CHANGED != "0"
+                    env.INFRA_CHANGED != "0"
                 }
             }
 
@@ -172,7 +169,7 @@ pipeline {
 
                 expression {
 
-                    INFRA_CHANGED != "0"
+                    env.INFRA_CHANGED != "0"
                 }
             }
 
@@ -207,7 +204,7 @@ pipeline {
 
                 expression {
 
-                    INFRA_CHANGED != "0"
+                    env.INFRA_CHANGED != "0"
                 }
             }
 
@@ -231,7 +228,7 @@ pipeline {
 
                 expression {
 
-                    INFRA_CHANGED != "0"
+                    env.INFRA_CHANGED != "0"
                 }
             }
 
@@ -257,7 +254,7 @@ pipeline {
         }
 
         // =====================================================
-        // Wait For EKS Cluster
+        // Wait For EKS
         // =====================================================
 
         stage('Wait For EKS') {
@@ -266,7 +263,7 @@ pipeline {
 
                 expression {
 
-                    INFRA_CHANGED != "0"
+                    env.INFRA_CHANGED != "0"
                 }
             }
 
@@ -316,22 +313,66 @@ pipeline {
 
                 expression {
 
-                    INFRA_CHANGED != "0"
+                    env.INFRA_CHANGED != "0"
                 }
             }
 
             steps {
 
-                dir('infra-repo/argocd') {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
 
                     sh '''
 
                         kubectl create namespace argocd \
                         --dry-run=client -o yaml | kubectl apply -f -
 
-                        kubectl apply -f .
+                        kubectl apply -n argocd -f \
+                        https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+                        kubectl rollout status deployment/argocd-server \
+                        -n argocd --timeout=300s
 
                     '''
+                }
+            }
+        }
+
+        // =====================================================
+        // Apply ArgoCD Application
+        // =====================================================
+
+        stage('Apply ArgoCD Application') {
+
+            when {
+
+                expression {
+
+                    env.INFRA_CHANGED != "0"
+                }
+            }
+
+            steps {
+
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
+
+                    dir('infra-repo/argocd') {
+
+                        sh '''
+
+                            kubectl apply -f application.yaml
+
+                        '''
+                    }
                 }
             }
         }
@@ -346,7 +387,7 @@ pipeline {
 
                 expression {
 
-                    APP_CHANGED != "0"
+                    env.APP_CHANGED != "0"
                 }
             }
 
@@ -372,7 +413,7 @@ pipeline {
 
                 expression {
 
-                    APP_CHANGED != "0"
+                    env.APP_CHANGED != "0"
                 }
             }
 
@@ -396,7 +437,7 @@ pipeline {
         }
 
         // =====================================================
-        // Deploy Application
+        // Deploy Kubernetes Manifests
         // =====================================================
 
         stage('Deploy Application') {
@@ -405,19 +446,27 @@ pipeline {
 
                 expression {
 
-                    APP_CHANGED != "0" || INFRA_CHANGED != "0"
+                    env.APP_CHANGED != "0" || env.INFRA_CHANGED != "0"
                 }
             }
 
             steps {
 
-                dir('infra-repo/manifests') {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
 
-                    sh '''
+                    dir('infra-repo/manifests') {
 
-                        kubectl apply -f .
+                        sh '''
 
-                    '''
+                            kubectl apply -f .
+
+                        '''
+                    }
                 }
             }
         }
@@ -430,17 +479,25 @@ pipeline {
 
             steps {
 
-                sh '''
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
 
-                    kubectl get nodes
+                    sh '''
 
-                    kubectl get pods -A
+                        kubectl get nodes
 
-                    kubectl get svc -A
+                        kubectl get pods -A
 
-                    kubectl get ingress -A
+                        kubectl get svc -A
 
-                '''
+                        kubectl get ingress -A
+
+                    '''
+                }
             }
         }
     }
@@ -455,6 +512,29 @@ pipeline {
         failure {
 
             echo 'Pipeline failed.'
+
+            script {
+
+                if (env.INFRA_CHANGED != "0") {
+
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-creds',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
+
+                        dir('infra-repo/terraform') {
+
+                            sh '''
+
+                                terraform destroy -auto-approve || true
+
+                            '''
+                        }
+                    }
+                }
+            }
         }
     }
 }
