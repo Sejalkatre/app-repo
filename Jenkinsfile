@@ -340,7 +340,7 @@ pipeline {
             }
         }
 
-        // =====================================================
+         // =====================================================
         // Verify Deployment
         // =====================================================
 
@@ -348,20 +348,33 @@ pipeline {
 
             steps {
 
-                sh '''
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
 
-                    kubectl get nodes
+                    sh '''
 
-                    kubectl get pods -A
+                        export AWS_DEFAULT_REGION=$AWS_REGION
 
-                    kubectl get svc -A
+                        aws eks update-kubeconfig \
+                        --region $AWS_REGION \
+                        --name $CLUSTER_NAME
 
-                    kubectl get ingress -A
+                        kubectl get nodes
 
-                '''
+                        kubectl get pods -A
+
+                        kubectl get svc -A
+
+                        kubectl get ingress -A
+
+                    '''
+                }
             }
         }
-    }
 
     // =====================================================
     // Post Actions
